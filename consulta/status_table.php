@@ -1,30 +1,19 @@
 <?php
-include('../api/apiConfig.php');
-include('../api/config.php');
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/api/apiConfig.php';
+require_once __DIR__ . '/api/config.php';
 
+checkRateLimit();
 
-// Chamada à API MercadoPago
-$curl = curl_init();
-curl_setopt_array($curl, array(
-    CURLOPT_URL => 'https://api.mercadopago.com/v1/payments/',
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_CUSTOMREQUEST => 'GET',
-    CURLOPT_HTTPHEADER => array(
-        'accept: application/json',
-        'content-type: application/json',
-        'X-Idempotency-Key: ' . date('Y-m-d-H:i:s-') . rand(0, 1500),
-        'Authorization: Bearer ' . $access_token
-    ),
-));
-$response = curl_exec($curl);
-$resultado = json_decode($response);
-curl_close($curl);
-
+// Consulta segura usando prepared statement (se houver parâmetros)
+$query_status = "SELECT * FROM status";
+$stmt = $conexao->prepare($query_status);
+$stmt->execute();
+$result_status = $stmt->get_result();
 ?>
 
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -38,11 +27,7 @@ curl_close($curl);
         <div class="p-6">
             <h2 class="text-xl font-semibold mb-4 text-gray-800">Registros de Status</h2>
 
-            <?php
-            $query_status = "SELECT * FROM status";
-            $result_status = $conexao->query($query_status);
-
-            if ($result_status->num_rows > 0): ?>
+            <?php if ($result_status->num_rows > 0): ?>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
@@ -51,7 +36,7 @@ curl_close($curl);
                                 $fields = $result_status->fetch_fields();
                                 foreach ($fields as $field) {
                                     echo '<th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">' .
-                                        ucfirst(str_replace('_', ' ', $field->name)) . '</th>';
+                                        htmlspecialchars(ucfirst(str_replace('_', ' ', $field->name))) . '</th>';
                                 }
                                 ?>
                             </tr>
@@ -77,9 +62,9 @@ curl_close($curl);
         </div>
     </div>
 </body>
-
 </html>
 
 <?php
-// $conexao->close();
+$stmt->close();
+// Não fechamos a conexão principal para ser reutilizada
 ?>

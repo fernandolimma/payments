@@ -1,16 +1,20 @@
 <?php
-include('../api/apiConfig.php');
-include('../api/config.php');
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/api/apiConfig.php';
+require_once __DIR__ . '/api/config.php';
 
-// Obter ID da venda da URL
-$saleId = isset($_GET['id']) ? $_GET['id'] : null;
+checkRateLimit();
 
-if (!$saleId) {
-    header('Location: index.php');
+// Validar e sanitizar o ID
+$saleId = isset($_GET['id']) ? sanitizeInput($_GET['id']) : null;
+
+if (!$saleId || !preg_match('/^\d+$/', $saleId)) {
+    logSecurityEvent("Tentativa de acesso com ID inválido: " . ($_GET['id'] ?? ''));
+    header('Location: consulta.php');
     exit;
 }
 
-// Buscar detalhes da venda rejeitada
+// Buscar detalhes com prepared statement
 $query = "SELECT * FROM status WHERE id_venda = ? AND status = 'rejected'";
 $stmt = $conexao->prepare($query);
 $stmt->bind_param("s", $saleId);
@@ -22,7 +26,6 @@ $stmt->close();
 
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -54,7 +57,7 @@ $stmt->close();
                         <?php if ($key !== 'id_venda' && $key !== 'status'): ?>
                             <div class="flex border-b pb-2">
                                 <span class="w-48 font-medium text-gray-500">
-                                    <?php echo ucfirst(str_replace('_', ' ', $key)); ?>:
+                                    <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $key))); ?>:
                                 </span>
                                 <span class="flex-1"><?php echo htmlspecialchars($value); ?></span>
                             </div>
@@ -67,9 +70,4 @@ $stmt->close();
         </div>
     </div>
 </body>
-
 </html>
-
-<?php
-// $conexao->close();
-?>

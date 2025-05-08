@@ -1,9 +1,41 @@
-<?php include('../api/apiConfig.php'); ?>
-<?php include('../api/config.php'); ?>
+<?php 
+require_once __DIR__ . '/../includes/security.php';
+require_once __DIR__ . '/../api/apiConfig.php';
+require_once __DIR__ . '/../api/config.php';
 
-<?php
+checkRateLimit();
+
 // Processar o formulário quando enviado
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!validateCsrfToken($_POST['csrf_token'] ?? '')) {
+        logSecurityEvent("Tentativa de CSRF detectada no PIX");
+        die("Token de segurança inválido.");
+    }
+
+    // Validar entrada
+    $requiredFields = [
+        'first_name', 'last_name', 'email', 'doc_type', 'doc_number',
+        'zip_code', 'street_name', 'street_number', 'neighborhood', 'city', 'federal_unit'
+    ];
+    
+    foreach ($requiredFields as $field) {
+        if (empty($_POST[$field])) {
+            die("O campo $field é obrigatório.");
+        }
+    }
+    
+    if (!validateEmail($_POST['email'])) {
+        die("Email inválido.");
+    }
+    
+    if ($_POST['doc_type'] === 'CPF' && !validateCPF($_POST['doc_number'])) {
+        die("CPF inválido.");
+    }
+    
+    if ($_POST['doc_type'] === 'CNPJ' && !validateCNPJ($_POST['doc_number'])) {
+        die("CNPJ inválido.");
+    }
+
     $curl = curl_init();
 
     // Dados da Compra
@@ -14,20 +46,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $dados["notification_url"] = "https://petcard.uno";
 
     // Dados Pessoais
-    $payer_email = $_POST['email']; // Armazenamos o email em uma variável separada
+    $payer_email = sanitizeInput($_POST['email']);
     $dados["payer"]["email"] = $payer_email;
-    $dados["payer"]["first_name"] = $_POST['first_name'];
-    $dados["payer"]["last_name"] = $_POST['last_name'];
-    $dados["payer"]["identification"]["type"] = $_POST['doc_type'];
-    $dados["payer"]["identification"]["number"] = $_POST['doc_number'];
+    $dados["payer"]["first_name"] = sanitizeInput($_POST['first_name']);
+    $dados["payer"]["last_name"] = sanitizeInput($_POST['last_name']);
+    $dados["payer"]["identification"]["type"] = sanitizeInput($_POST['doc_type']);
+    $dados["payer"]["identification"]["number"] = sanitizeInput($_POST['doc_number']);
 
     // Dados de Endereço
-    $dados["payer"]["address"]["zip_code"] = $_POST['zip_code'];
-    $dados["payer"]["address"]["street_name"] = $_POST['street_name'];
-    $dados["payer"]["address"]["street_number"] = $_POST['street_number'];
-    $dados["payer"]["address"]["neighborhood"] = $_POST['neighborhood'];
-    $dados["payer"]["address"]["city"] = $_POST['city'];
-    $dados["payer"]["address"]["federal_unit"] = $_POST['federal_unit'];
+    $dados["payer"]["address"]["zip_code"] = sanitizeInput($_POST['zip_code']);
+    $dados["payer"]["address"]["street_name"] = sanitizeInput($_POST['street_name']);
+    $dados["payer"]["address"]["street_number"] = sanitizeInput($_POST['street_number']);
+    $dados["payer"]["address"]["neighborhood"] = sanitizeInput($_POST['neighborhood']);
+    $dados["payer"]["address"]["city"] = sanitizeInput($_POST['city']);
+    $dados["payer"]["address"]["federal_unit"] = sanitizeInput($_POST['federal_unit']);
 
     curl_setopt_array($curl, array(
         CURLOPT_URL => 'https://api.mercadopago.com/v1/payments',
@@ -43,58 +75,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ));
 
     $response = curl_exec($curl);
+    
+    if (curl_errno($curl)) {
+        error_log("Erro na requisição PIX ao Mercado Pago: " . curl_error($curl));
+        die("Erro ao processar o pagamento PIX. Por favor, tente novamente.");
+    }
+    
     $resultado = json_decode($response);
     $id = $dados["external_reference"];
     curl_close($curl);
 
-    // Inserir no banco de dados - status (código existente)
-    $sql_status = "INSERT INTO status(
+    // Inserir no banco de dados - status
+    $stmt = $conexao->prepare("INSERT INTO status(
             id_reg,
             email, 
             pag_metodo, 
             status, 
             description, 
             id_venda
-        ) VALUES(
-            '" . $id . "', 
-            '" . mysqli_real_escape_string($conexao, $payer_email) . "',                  
-            '" . $resultado->payment_method_id . "', 
-            '" . $resultado->status . "', 
-            '" . $resultado->description . "', 
-            '" . $resultado->id . "'
-        )";
+        ) VALUES (?, ?, ?, ?, ?, ?)");
+    
+    $stmt->bind_param(
+        "ssssss",
+        $id,
+        $payer_email,
+        $resultado->payment_method_id,
+        $resultado->status,
+        $resultado->description,
+        $resultado->id
+    );
 
-    if (mysqli_query($conexao, $sql_status)) {
-        // Inserir endereço na nova tabela
-        $sql_endereco = "INSERT INTO endereco(
-                    id_venda,
-                    id_registro,
-                    cep,
-                    logradouro,
-                    numero,
-                    bairro,
-                    cidade,
-                    estado
-                ) VALUES(
-                    '" . $resultado->id . "',
-                    '" . $id . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['zip_code']) . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['street_name']) . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['street_number']) . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['neighborhood']) . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['city']) . "',
-                    '" . mysqli_real_escape_string($conexao, $_POST['federal_unit']) . "'
-                )";
-
-        mysqli_query($conexao, $sql_endereco);
+    if ($stmt->execute()) {
+        // Inserir endereço
+        $stmt_endereco = $conexao->prepare("INSERT INTO endereco(
+                id_venda,
+                id_registro,
+                cep,
+                logradouro,
+                numero,
+                bairro,
+                cidade,
+                estado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        
+        $stmt_endereco->bind_param(
+            "ssssssss",
+            $resultado->id,
+            $id,
+            $_POST['zip_code'],
+            $_POST['street_name'],
+            $_POST['street_number'],
+            $_POST['neighborhood'],
+            $_POST['city'],
+            $_POST['federal_unit']
+        );
+        
+        if (!$stmt_endereco->execute()) {
+            error_log("Erro ao inserir endereço PIX: " . $stmt_endereco->error);
+        }
+    } else {
+        error_log("Erro ao inserir status PIX: " . $stmt->error);
     }
 }
-
 ?>
 
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -112,6 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="p-6">
             <?php if (!isset($resultado)): ?>
                 <form method="POST" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                     <div>
                         <label for="first_name" class="block text-sm font-medium text-gray-700 mb-1">Nome</label>
                         <input type="text" id="first_name" name="first_name" required
@@ -258,6 +305,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
         </div>
     </div>
+     <script>
+    function copyPixCode() {
+        const pixCode = document.getElementById('pix-code').innerText;
+        navigator.clipboard.writeText(pixCode).then(() => {
+            const copySuccess = document.getElementById('copy-success');
+            copySuccess.classList.remove('hidden');
+            setTimeout(() => copySuccess.classList.add('hidden'), 2000);
+        });
+    }
+    </script>
 </body>
 
 </html>

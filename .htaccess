@@ -1,0 +1,23 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Forçar HTTPS
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+    
+    # Proteger arquivos sensíveis
+    <FilesMatch "(\.env|config\.php|apiConfig\.php|security\.log)$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+    
+    # Prevenir directory listing
+    Options -Indexes
+    
+    # Proteção contra XSS
+    <IfModule mod_headers.c>
+        Header set X-XSS-Protection "1; mode=block"
+        Header always append X-Frame-Options DENY
+        Header set X-Content-Type-Options nosniff
+    </IfModule>
+</IfModule>

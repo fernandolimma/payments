@@ -1,11 +1,14 @@
 <?php
-include('../api/apiConfig.php');
-include('../api/config.php');
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/api/apiConfig.php';
+require_once __DIR__ . '/api/config.php';
 
-// Configurar o timezone para São Paulo no início do arquivo
+checkRateLimit();
+
+// Configurar o timezone
 date_default_timezone_set('America/Sao_Paulo');
 
-// Função para atualizar o status de uma transação no banco de dados
+// Funções de atualização
 function updateTransactionStatus($conexao, $transaction_id, $new_status) {
     $sql = "UPDATE status SET status = ? WHERE id_venda = ?";
     $stmt = $conexao->prepare($sql);
@@ -13,9 +16,8 @@ function updateTransactionStatus($conexao, $transaction_id, $new_status) {
     return $stmt->execute();
 }
 
-// Função para obter vendas rejeitadas
 function getRejectedSales($conexao) {
-    $rejectedSales = array();
+    $rejectedSales = [];
     $query = "SELECT id_venda FROM status WHERE status = 'rejected' ORDER BY id DESC LIMIT 5";
     $result = $conexao->query($query);
 
@@ -27,8 +29,8 @@ function getRejectedSales($conexao) {
     return $rejectedSales;
 }
 
-// Buscar os últimos 5 registros da tabela status
-$latestTransactions = array();
+// Buscar últimos registros
+$latestTransactions = [];
 $query = "SELECT id_venda, status, description FROM status ORDER BY id DESC LIMIT 5";
 $result = $conexao->query($query);
 
@@ -38,10 +40,8 @@ if ($result->num_rows > 0) {
     }
 }
 
-// Array para armazenar os resultados da API
-$apiResults = array();
-
-// Consultar a API para cada transação e atualizar o banco de dados
+// Consultar API para cada transação
+$apiResults = [];
 foreach ($latestTransactions as $transaction) {
     $curl = curl_init();
     curl_setopt_array($curl, array(
@@ -55,11 +55,17 @@ foreach ($latestTransactions as $transaction) {
             'Authorization: Bearer ' . $access_token
         ),
     ));
+    
     $response = curl_exec($curl);
+    
+    if (curl_errno($curl)) {
+        error_log("Erro ao consultar pagamento " . $transaction['id_venda'] . ": " . curl_error($curl));
+        continue;
+    }
+    
     $apiResult = json_decode($response);
     $apiResults[] = $apiResult;
     
-    // Atualizar o status no banco de dados se for diferente
     if (isset($apiResult->status) && $apiResult->status != $transaction['status']) {
         updateTransactionStatus($conexao, $transaction['id_venda'], $apiResult->status);
     }
@@ -67,7 +73,6 @@ foreach ($latestTransactions as $transaction) {
     curl_close($curl);
 }
 
-// Obter vendas rejeitadas (atualizadas)
 $rejectedSales = getRejectedSales($conexao);
 ?>
 
@@ -79,7 +84,7 @@ $rejectedSales = getRejectedSales($conexao);
     <title>Painel de Pagamentos</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
-    <meta http-equiv="refresh" content="300"> <!-- Atualiza a página a cada 5 minutos -->
+    <meta http-equiv="refresh" content="300">
 </head>
 
 <body class="bg-gray-100 min-h-screen">
@@ -153,7 +158,10 @@ $rejectedSales = getRejectedSales($conexao);
             </div>
         </div>
 
-        <?php include('status_table.php'); ?>
+        <?php 
+        // Incluir a tabela de status com proteção
+        include('status_table.php'); 
+        ?>
 
         <footer class="mt-12 text-center text-gray-500 text-sm">
             <p>Sistema de pagamentos API - Mercado Pago &copy; <?php echo date('Y'); ?></p>
@@ -161,7 +169,6 @@ $rejectedSales = getRejectedSales($conexao);
     </div>
 
     <script>
-        // Atualiza a página a cada 5 minutos (300000 ms)
         setTimeout(function(){
             window.location.reload();
         }, 300000);
